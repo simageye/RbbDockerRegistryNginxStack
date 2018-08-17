@@ -11,11 +11,12 @@ services:
       dockerfile: Dockerfile
     ports:
       - 443:443
+    volumes:
+      - ./registry_data_nginx/conf.d/:/etc/nginx/conf.d:ro
+      - static:/srv/Portus/public:ro
     links:
       - rbbdockerreg:registry
       - rbbdockerregportus:portus
-    volumes:
-      - ./registry_data_nginx/conf.d/:/etc/nginx/conf.d:ro
 
 
   rbbdockerregportus:
@@ -39,18 +40,21 @@ services:
       # Secrets. It can possibly be handled better with Swarm's secrets.
       - PORTUS_SECRET_KEY_BASE=${PORTUS_SECRET_KEY_BASE}
       - PORTUS_PASSWORD=${PORTUS_PASSWORD}
-      - PORTUS_KEY_PATH=/certificates/portus.key
+      - PORTUS_KEY_PATH=/certificates/domain.key
 
-      # false = NGinx, true = puma; is serving the assets instead of Puma
-      - RAILS_SERVE_STATIC_FILES=false
-      #- PORTUS_PUMA_HOST=0.0.0.0:3000
-      #- PORTUS_CHECK_SSL_USAGE_ENABLED=false
-      #- PORTUS_SECURITY_CLAIR_SERVER=http://clair:6060
+      - PORTUS_PUMA_HOST=0.0.0.0:3000
+      - PORTUS_CHECK_SSL_USAGE_ENABLED=false
+      - PORTUS_SECURITY_CLAIR_SERVER=http://clair:6060
       # SSL
-      #- PORTUS_PUMA_TLS_KEY=/certificates/portus.key
-      #- PORTUS_PUMA_TLS_CERT=/certificates/portus.crt
+      - PORTUS_PUMA_TLS_KEY=/certificates/domain.key
+      - PORTUS_PUMA_TLS_CERT=/certificates/domain.crt
+      # false = NGinx, true = puma; is serving the assets instead of Puma
+      - RAILS_SERVE_STATIC_FILES='false'
     ports:
       - 3000:3000
+    volumes:
+      - ./registry_data_nginx/conf.d/:/certificates:ro
+      - static:/srv/Portus/public
     links:
       - rbbdockerregportusmariadb
 
@@ -85,12 +89,20 @@ services:
       dockerfile: Dockerfile
     ports:
       - ${MACHINE_FQDN}:5000:5000
-    links:
-      - rbbdockerregportus:portus
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+    command: ["/bin/sh", "/etc/docker/registry/init/init.sh"]
     volumes:
       - ./registry_data:/data
+      - ./registry_data/init:/etc/docker/registry/init:ro
+      - ./registry_data_nginx/conf.d/:/secrets:ro
+    links:
+      - rbbdockerregportus:portus
+
+
+volumes:
+  static:
+    driver: local
 
 
 ##############################################################
