@@ -1,4 +1,5 @@
 version: '3'
+
 services:
   rbbdockerregnginx:
     image: registry_rbbdockerregnginx:1.15.2
@@ -9,14 +10,50 @@ services:
     build:
       context: ./registry_dockerfile_nginx
       dockerfile: Dockerfile
-    ports:
-      - 443:443
     volumes:
-      - ./registry_data_nginx/conf.d/:/etc/nginx/conf.d:ro
+      - ./registry_data_nginx/:/etc/nginx:ro
+      #- ./registry_data_nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - static:/srv/Portus/public:ro
-    links:
-      - rbbdockerreg:registry
-      - rbbdockerregportus:portus
+    network_mode: "service:rbbdockerregportusmariadb"
+
+
+
+  rbbdockerregportusb:
+    image: registry_rbbdockerregportusb:2.3
+    container_name: rbbdockerregportusb
+    labels:
+      com.rbbdockerreg.description: "RBB Private Registry Portus web interface"
+      com.rbbdockerreg.department: "TPS-O"
+    build:
+      context: ./registry_dockerfile_portus
+      dockerfile: Dockerfile
+    depends_on:
+      - rbbdockerregportus
+      - rbbdockerregportusmariadb
+    environment:
+      # Theoretically not needed, but cconfig's been buggy on this...
+      - CCONFIG_PREFIX=PORTUS
+      - PORTUS_MACHINE_FQDN_VALUE=${MACHINE_FQDN}
+
+      # DB. The password for the database should definitely not be here. You are
+      # probably better off with Docker Swarm secrets.
+      - PORTUS_DB_HOST=rbbdockerregportusmariadb
+      - PORTUS_DB_DATABASE=portus_production
+      - PORTUS_DB_PASSWORD=${DATABASE_PASSWORD}
+      - PORTUS_DB_POOL=5
+
+      # Secrets. It can possibly be handled better with Swarm's secrets.
+      - PORTUS_SECRET_KEY_BASE=${PORTUS_SECRET_KEY_BASE}
+      - PORTUS_PASSWORD=${PORTUS_PASSWORD}
+      - PORTUS_KEY_PATH=/certificates/domain.key
+
+
+      - PORTUS_BACKGROUND=true
+    volumes:
+      - ./registry_data_nginx/conf.d/:/certificates:ro
+      - ./registry_data_nginx/conf.d/:/usr/local/share/ca-certificates/docker-dev-cert
+    network_mode: "service:rbbdockerregportusmariadb"
+
 
 
   rbbdockerregportus:
@@ -30,7 +67,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - PORTUS_MACHINE_FQDN_VALUE=${MACHINE_FQDN}
-      - CCONFIG_PREFIX=PORTUS
+      #- CCONFIG_PREFIX=PORTUS
 
       - PORTUS_DB_HOST=rbbdockerregportusmariadb
       - PORTUS_DB_DATABASE=portus_production
@@ -42,21 +79,21 @@ services:
       - PORTUS_PASSWORD=${PORTUS_PASSWORD}
       - PORTUS_KEY_PATH=/certificates/domain.key
 
-      - PORTUS_PUMA_HOST=0.0.0.0:3000
-      - PORTUS_CHECK_SSL_USAGE_ENABLED=false
-      - PORTUS_SECURITY_CLAIR_SERVER=http://clair:6060
-      # SSL
-      - PORTUS_PUMA_TLS_KEY=/certificates/domain.key
-      - PORTUS_PUMA_TLS_CERT=/certificates/domain.crt
+#      # SSL
+#      - PORTUS_PUMA_TLS_KEY=/certificates/domain.key
+#      - PORTUS_PUMA_TLS_CERT=/certificates/domain.crt
       # false = NGinx, true = puma; is serving the assets instead of Puma
       - RAILS_SERVE_STATIC_FILES='false'
-    ports:
-      - 3000:3000
+
+      #- PORTUS_PUMA_HOST=0.0.0.0:3000
+      #- PORTUS_CHECK_SSL_USAGE_ENABLED=false
+      #- PORTUS_SECURITY_CLAIR_SERVER=http://clair:6060
     volumes:
       - ./registry_data_nginx/conf.d/:/certificates:ro
+      - ./registry_data_nginx/conf.d/:/usr/local/share/ca-certificates/docker-dev-cert
       - static:/srv/Portus/public
-    links:
-      - rbbdockerregportusmariadb
+    network_mode: "service:rbbdockerregportusmariadb"
+
 
 
   rbbdockerregportusmariadb:
@@ -76,6 +113,11 @@ services:
               #--init-connect='SET NAMES UTF8;' 
     volumes:
       - ./registry_data_mariadb:/var/lib/mysql
+    ports:
+      - 443:443                            # nginx
+      #- 3000:3000                         # portus
+      - ${MACHINE_FQDN}:5000:5000         # dockerreg
+
 
 
   rbbdockerreg:
@@ -87,17 +129,34 @@ services:
     build:
       context: ./registry_dockerfile
       dockerfile: Dockerfile
-    ports:
-      - ${MACHINE_FQDN}:5000:5000
     environment:
-      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+    #  #REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+
+      ## Authentication
+      #REGISTRY_AUTH_TOKEN_REALM: https://${MACHINE_FQDN}/v2/token
+      #REGISTRY_AUTH_TOKEN_SERVICE: ${MACHINE_FQDN}
+      #REGISTRY_AUTH_TOKEN_ISSUER: ${MACHINE_FQDN}
+      #REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /secrets/domain.crt
+
+      ## SSL
+      #REGISTRY_HTTP_TLS_CERTIFICATE: /secrets/domain.crt
+      #REGISTRY_HTTP_TLS_KEY: /secrets/domain.key
+
+      # Portus endpoint
+      REGISTRY_NOTIFICATIONS_ENDPOINTS: >
+        - name: portus
+          url: http://${MACHINE_FQDN}:3000/v2/webhooks/events
+          timeout: 2000ms
+          threshold: 5
+          backoff: 1s
     command: ["/bin/sh", "/etc/docker/registry/init/init.sh"]
     volumes:
-      - ./registry_data:/data
+      - ./registry_data:/var/lib/registry
       - ./registry_data/init:/etc/docker/registry/init:ro
+      - ./registry_data/conf/config.yml:/etc/docker/registry/config.yml:ro
       - ./registry_data_nginx/conf.d/:/secrets:ro
-    links:
-      - rbbdockerregportus:portus
+    network_mode: "service:rbbdockerregportusmariadb"
+
 
 
 volumes:
