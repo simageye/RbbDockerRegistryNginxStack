@@ -1,6 +1,7 @@
 version: '3'
 
 services:
+
   rbbdockerregnginx:
     image: registry_rbbdockerregnginx:1.15.2
     container_name: rbbdockerregnginx
@@ -17,9 +18,24 @@ services:
     network_mode: "service:rbbdockerregportusmariadb"
 
 
+#  rbbdockerregportusclair:
+#    image: quay.io/coreos/clair:v2.0.2
+#    restart: unless-stopped
+#    depends_on:
+#      - postgres
+#    links:
+#      - postgres
+#    ports:
+#      - "6060-6061:6060-6061"
+#    volumes:
+#      - /tmp:/tmp
+#      - ./examples/compose/clair/clair.yml:/clair.yml
+#    command: [-config, /clair.yml]
+
+
 
   rbbdockerregportusb:
-    image: registry_rbbdockerregportusb:2.3
+    image: registry_rbbdockerregportusb:2.3.5
     container_name: rbbdockerregportusb
     labels:
       com.rbbdockerreg.description: "RBB Private Registry Portus web interface"
@@ -47,17 +63,28 @@ services:
       - PORTUS_PASSWORD=${PORTUS_PASSWORD}
       - PORTUS_KEY_PATH=/certificates/domain.key
 
-
       - PORTUS_BACKGROUND=true
+      - RAILS_SERVE_STATIC_FILES=false
+
+      # SSL
+      - PORTUS_REGISTRY_OPENSSL_VERIFY_MODE=none
+
+      # Additional Settings
+      - PORTUS_DELETE_ENABLED=true
+      - PORTUS_CHECK_SSL_USAGE_ENABLED=false
+      - PORTUS_BACKGROUND_SYNC_STRATEGY=on-start
+      - PORTUS_LOG_LEVEL=debug
     volumes:
       - ./registry_data_nginx/conf.d/:/certificates:ro
       - ./registry_data_nginx/conf.d/:/usr/local/share/ca-certificates/docker-dev-cert
+      - ./registry_data_portus:/data
+      #- ./registry_data_portus:/srv/Portus
     network_mode: "service:rbbdockerregportusmariadb"
 
 
 
   rbbdockerregportus:
-    image: registry_rbbdockerregportus:2.3
+    image: registry_rbbdockerregportus:2.3.5
     container_name: rbbdockerregportus
     labels:
       com.rbbdockerreg.description: "RBB Private Registry Portus web interface"
@@ -66,8 +93,9 @@ services:
       context: ./registry_dockerfile_portus
       dockerfile: Dockerfile
     environment:
+      # Theoretically not needed, but cconfig's been buggy on this...
+      - CCONFIG_PREFIX=PORTUS
       - PORTUS_MACHINE_FQDN_VALUE=${MACHINE_FQDN}
-      #- CCONFIG_PREFIX=PORTUS
 
       - PORTUS_DB_HOST=rbbdockerregportusmariadb
       - PORTUS_DB_DATABASE=portus_production
@@ -79,15 +107,19 @@ services:
       - PORTUS_PASSWORD=${PORTUS_PASSWORD}
       - PORTUS_KEY_PATH=/certificates/domain.key
 
-#      # SSL
-#      - PORTUS_PUMA_TLS_KEY=/certificates/domain.key
-#      - PORTUS_PUMA_TLS_CERT=/certificates/domain.crt
-      # false = NGinx, true = puma; is serving the assets instead of Puma
-      - RAILS_SERVE_STATIC_FILES='false'
-
+      ## false = NGinx, true = puma; is serving the assets instead of Puma
+      - RAILS_SERVE_STATIC_FILES=false
+      #- PORTUS_PUMA_TLS_KEY=/certificates/domain.key
+      #- PORTUS_PUMA_TLS_CERT=/certificates/domain.crt
       #- PORTUS_PUMA_HOST=0.0.0.0:3000
-      #- PORTUS_CHECK_SSL_USAGE_ENABLED=false
+
+      ## Clair
       #- PORTUS_SECURITY_CLAIR_SERVER=http://clair:6060
+
+      # Additional configs:
+      - PORTUS_DELETE_ENABLED=true
+      - PORTUS_SIGNUP_ENABLED=false
+      - PORTUS_CHECK_SSL_USAGE_ENABLED=false
     volumes:
       - ./registry_data_nginx/conf.d/:/certificates:ro
       - ./registry_data_nginx/conf.d/:/usr/local/share/ca-certificates/docker-dev-cert
@@ -109,14 +141,13 @@ services:
       - MYSQL_DATABASE=portus_production
       # the password shouldn't be handled like this.
       - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD}
-    command: mysqld --character-set-server=utf8 --collation-server=utf8_unicode_ci --innodb-flush-log-at-trx-commit=0
-              #--init-connect='SET NAMES UTF8;' 
+    command: mysqld --character-set-server=utf8 --collation-server=utf8_unicode_ci --init-connect='SET NAMES UTF8;' --innodb-flush-log-at-trx-commit=0
     volumes:
       - ./registry_data_mariadb:/var/lib/mysql
     ports:
       - 443:443                            # nginx
       #- 3000:3000                         # portus
-      - ${MACHINE_FQDN}:5000:5000         # dockerreg
+      #- ${MACHINE_FQDN}:5000:5000         # dockerreg
 
 
 
@@ -130,13 +161,16 @@ services:
       context: ./registry_dockerfile
       dockerfile: Dockerfile
     environment:
-    #  #REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+      #REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data   # Siehe volumes var/lib/registry
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+
+      REGISTRY_HTTP_SECRET: "FBD3D07B-563A-4B62-B80B-DB29F7751A00"
 
       ## Authentication
-      #REGISTRY_AUTH_TOKEN_REALM: https://${MACHINE_FQDN}/v2/token
-      #REGISTRY_AUTH_TOKEN_SERVICE: ${MACHINE_FQDN}
-      #REGISTRY_AUTH_TOKEN_ISSUER: ${MACHINE_FQDN}
-      #REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /secrets/domain.crt
+      REGISTRY_AUTH_TOKEN_REALM: https://${MACHINE_FQDN}/v2/token
+      REGISTRY_AUTH_TOKEN_SERVICE: ${MACHINE_FQDN}
+      REGISTRY_AUTH_TOKEN_ISSUER: ${MACHINE_FQDN}
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /secrets/domain.crt
 
       ## SSL
       #REGISTRY_HTTP_TLS_CERTIFICATE: /secrets/domain.crt
@@ -149,6 +183,10 @@ services:
           timeout: 2000ms
           threshold: 5
           backoff: 1s
+
+      # Additional options
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+
     command: ["/bin/sh", "/etc/docker/registry/init/init.sh"]
     volumes:
       - ./registry_data:/var/lib/registry
